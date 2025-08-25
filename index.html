@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Frame Tiles — 14×14 outside, 12×12 inside</title>
+<style>
+  :root{
+    --cell: 48px;                  /* 1 m = 48 px */
+    --board: calc(14 * var(--cell));
+    --hole:  calc(12 * var(--cell));
+    --bg: #fafafa;
+    --ink: #0b1021;
+    --muted:#7b8794;
+    --frame:#ffffff;
+    --grid:#e3e7ee;
+    --ring:#f6f7fb;
+    --focus:#3b82f6;
+    --ok:#22c55e;
+  }
+
+  /* Polypad-ish colours, mapped to lengths 3..10 */
+  .len-3  { background:#e6463a; }     /* red */
+  .len-4  { background:#d61a7f; }     /* magenta */
+  .len-5  { background:#7e22ce; }     /* purple */
+  .len-6  { background:#4f46e5; }     /* indigo */
+  .len-7  { background:#1d4ed8; }     /* blue */
+  .len-8  { background:#0ea5a0; }     /* teal */
+  .len-9  { background:#16a34a; }     /* green */
+  .len-10 { background:#d6d01a; }     /* yellow */
+
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif}
+  .wrap{max-width: min(1100px, 96vw); margin:20px auto 40px; padding: 12px;}
+  h1{font-size: clamp(20px, 3vw, 28px); margin:0 0 12px}
+  .sub{color:var(--muted); margin-bottom:18px}
+
+  .stage{position:relative; display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap}
+  .left-col{position:relative; width:var(--board); min-height: calc(var(--board) + 5*var(--cell));}
+
+  .board{
+    position:relative; width:var(--board); height:var(--board);
+    background: var(--ring);
+    box-shadow: 0 1px 0 rgba(0,0,0,.06), inset 0 0 0 2px #d9dee8;
+    border-radius: 8px;
+    overflow:hidden;
+  }
+
+  .board::before{
+    content:"";
+    position:absolute; inset:0;
+    background:
+      linear-gradient(to right, var(--grid) 1px, transparent 1px) 0 0 / var(--cell) var(--cell),
+      linear-gradient(to bottom, var(--grid) 1px, transparent 1px) 0 0 / var(--cell) var(--cell);
+    pointer-events:none;
+  }
+  .hole{
+    position:absolute; left:calc(1 * var(--cell)); top:calc(1 * var(--cell));
+    width:var(--hole); height:var(--hole);
+    background: var(--frame);
+    border-radius:6px;
+    box-shadow: inset 0 0 0 2px #e5e7eb;
+    pointer-events:none;
+  }
+
+  /* dimension labels */
+  .dim-outer{ position:absolute; left:-55px; top:calc(50% - 14px); transform:rotate(-90deg); color:#334155; font-weight:600; }
+  .dim-inner{ position:absolute; left:0; right:0; bottom:calc(1 * var(--cell) + 6px); text-align:center; color:#334155; font-weight:600; }
+
+  .tile{
+    position:absolute; touch-action: none; user-select:none; cursor:grab;
+    height: var(--cell); border-radius:10px; box-shadow: 0 2px 4px rgba(0,0,0,.15);
+    display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:18px;
+    outline: 2px solid rgba(255,255,255,.45);
+  }
+  .tile.vertical{ width: var(--cell); height: auto; }
+  .tile.dragging{ opacity: .9; cursor:grabbing; box-shadow: 0 6px 16px rgba(0,0,0,.25); }
+
+  .hud{ display:flex; align-items:center; gap:10px; margin-top: 8px; }
+  button{
+    background:#111827; color:white; border:none; border-radius:12px; padding:10px 14px;
+    font-weight:700; cursor:pointer; box-shadow:0 2px 0 rgba(0,0,0,.2);
+  }
+
+  /* success banner */
+  .banner{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; pointer-events:none; }
+  .banner.show{ display:flex; }
+  .banner .msg{
+    background:white; border-radius:18px; padding:22px 28px; font-weight:900; font-size: clamp(18px, 2.4vw, 28px);
+    color: var(--ok); box-shadow:0 14px 40px rgba(0,0,0,.25), inset 0 0 0 3px #bbf7d0;
+  }
+
+  /* confetti */
+  .confetti{ position:fixed; inset:0; overflow:hidden; pointer-events:none; }
+  .confetti span{ position:absolute; width:10px; height:16px; animation: fall linear forwards; }
+  @keyframes fall{ 0%{ transform: translateY(-10vh) rotate(0); } 100%{ transform: translateY(110vh) rotate(720deg); } }
+
+  .tile:focus-visible{ outline:3px solid var(--focus); outline-offset:2px; }
+  .flash-ok{ box-shadow: 0 0 0 3px rgba(34,197,94,.8) !important; }
+  .flash-bad{ box-shadow: 0 0 0 3px rgba(239,68,68,.8) !important; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Cover the Frame with 8 Tiles</h1>
+    <div class="sub">Outer square: <strong>14&nbsp;m × 14&nbsp;m</strong> · Inner opening: <strong>12&nbsp;m × 12&nbsp;m</strong> · Tiles are <em>1&nbsp;m</em> wide. Double-click (or press <kbd>R</kbd>) to rotate on desktop; single-tap to rotate on touch.</div>
+
+    <div class="stage">
+      <div class="left-col" id="leftCol">
+        <div id="board" class="board" role="application" aria-label="14 by 14 metre square frame">
+          <div class="dim-outer">14 m</div>
+          <div class="hole"><div class="dim-inner">12 m</div></div>
+        </div>
+      </div>
+
+      <div class="hud">
+        <button id="resetBtn" type="button" aria-label="Reset tiles">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="banner" class="banner" aria-live="polite" aria-atomic="true">
+    <div class="msg">🎉 Congratulations, you solved the tiles task!</div>
+  </div>
+  <div id="confetti" class="confetti" aria-hidden="true"></div>
+
+<script>
+(() => {
+  const CELL = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--cell'));
+  const leftCol = document.getElementById('leftCol');
+  const boardEl = document.getElementById('board');
+  const resetBtn= document.getElementById('resetBtn');
+  const banner  = document.getElementById('banner');
+  const confetti = document.getElementById('confetti');
+
+  const BOARD_CELLS = 14;
+  const RING_COUNT = BOARD_CELLS*BOARD_CELLS - 12*12; // 52
+  const lengths = [3,4,5,6,7,8,9,10];
+
+  const tiles = []; // {el, len, vert, inBoard, gridPos:{c,r}, x0,y0}
+
+  // --- geometry helpers in LEFT-COL coordinates ---
+  const bLeft = () => boardEl.offsetLeft;
+  const bTop  = () => boardEl.offsetTop;
+  const bRight= () => bLeft() + boardEl.offsetWidth;
+  const bBottom=() => bTop()  + boardEl.offsetHeight;
+
+  const snap = v => Math.round(v / CELL);
+  const isRingCell = (c,r) => (c>=0 && c<14 && r>=0 && r<14) && (c===0 || r===0 || c===13 || r===13);
+
+  function occupiedGrid(ignore=null){
+    const occ = new Set();
+    for (const t of tiles){
+      if (t===ignore || !t.inBoard) continue;
+      const {c,r} = t.gridPos;
+      if (t.vert) for (let i=0;i<t.len;i++) occ.add(`${c},${r+i}`);
+      else        for (let i=0;i<t.len;i++) occ.add(`${c+i},${r}`);
+    }
+    return occ;
+  }
+
+  function validAt(tile,c,r){
+    // stay on ring & bounds
+    if (tile.vert){
+      if (!(c===0 || c===13)) return false;
+      if (r<0 || r+tile.len-1>13) return false;
+      for (let i=0;i<tile.len;i++) if(!isRingCell(c,r+i)) return false;
+    } else {
+      if (!(r===0 || r===13)) return false;
+      if (c<0 || c+tile.len-1>13) return false;
+      for (let i=0;i<tile.len;i++) if(!isRingCell(c+i,r)) return false;
+    }
+    // no overlap
+    const occ = occupiedGrid(tile);
+    if (tile.vert){
+      for(let i=0;i<tile.len;i++) if (occ.has(`${c},${r+i}`)) return false;
+    } else {
+      for(let i=0;i<tile.len;i++) if (occ.has(`${c+i},${r}`)) return false;
+    }
+    return true;
+  }
+
+  function placeTileAt(tile,c,r){
+    tile.gridPos = {c,r};
+    tile.inBoard = true;
+    tile.el.style.left = (bLeft() + c*CELL) + 'px';
+    tile.el.style.top  = (bTop()  + r*CELL) + 'px';
+  }
+
+  function trySnapAndNudge(tile, leftRel, topRel){
+    // leftRel/topRel are tile's top-left in left-col coordinates
+    let c = snap(leftRel - bLeft()), r = snap(topRel - bTop());
+
+    // direct snap
+    if (validAt(tile,c,r)){ placeTileAt(tile,c,r); flash(tile.el,'ok'); checkWin(); return true; }
+
+    // search 8 neighbors within radius 1
+    const neighbors = [[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    for (const [dx,dy] of neighbors){
+      const cc = c+dx, rr = r+dy;
+      if (validAt(tile,cc,rr)){ placeTileAt(tile,cc,rr); flash(tile.el,'ok'); checkWin(); return true; }
+    }
+
+    // no legal spot near → back to rack
+    flash(tile.el,'bad');
+    returnToRack(tile);
+    return false;
+  }
+
+  function flash(el,kind){
+    el.classList.add(kind==='ok'?'flash-ok':'flash-bad');
+    setTimeout(()=>el.classList.remove('flash-ok','flash-bad'), 180);
+  }
+
+  function returnToRack(tile){
+    tile.inBoard=false; tile.gridPos=null;
+    tile.el.style.left = tile.x0+'px';
+    tile.el.style.top  = tile.y0+'px';
+  }
+
+  function checkWin(){
+    const occ = occupiedGrid();
+    if (occ.size !== RING_COUNT) return false;
+    for (let r=0;r<14;r++) for (let c=0;c<14;c++) if (isRingCell(c,r) && !occ.has(`${c},${r}`)) return false;
+    celebrate(); return true;
+  }
+
+  function celebrate(){
+    banner.classList.add('show'); launchConfetti();
+    setTimeout(()=>banner.classList.remove('show'), 2600);
+  }
+  function launchConfetti(){
+    confetti.innerHTML=''; const colors=['#f43f5e','#f59e0b','#22c55e','#3b82f6','#a855f7','#06b6d4','#facc15','#10b981'];
+    for(let i=0;i<140;i++){
+      const s=document.createElement('span');
+      s.style.left = Math.random()*100 + 'vw';
+      s.style.top  = (-10 - Math.random()*30) + 'vh';
+      s.style.background = colors[(Math.random()*colors.length)|0];
+      s.style.animationDuration = (1400+Math.random()*800)+'ms';
+      confetti.appendChild(s);
+    }
+    setTimeout(()=>confetti.innerHTML='', 2600);
+  }
+
+  // ---------- Layout rack (multi-row that always fits under board) ----------
+  // Rows chosen to keep width <= 14 cells: [10,3], [9,4], [8,5], [7,6]
+  const rows = [[10,3],[9,4],[8,5],[7,6]];
+
+  function layoutRackPositions(){
+    const startLeft = bLeft();
+    const startTop  = bTop() + boardEl.offsetHeight + 14;
+    const rowGap = 10;
+
+    const posByLen = new Map();
+    let y = startTop;
+    for (const row of rows){
+      let x = startLeft;
+      row.forEach((L,idx)=>{
+        posByLen.set(L, {x, y});
+        x += L*CELL + 10;
+      });
+      y += CELL + rowGap;
+    }
+    return posByLen;
+  }
+
+  function build(){
+    const posByLen = layoutRackPositions();
+    for (const L of lengths){
+      const t = document.createElement('div');
+      t.className = `tile len-${L}`;
+      t.tabIndex = 0;
+      t.textContent = String(L);
+      t.style.width = `calc(${L} * var(--cell))`;
+      t.style.height = `var(--cell)`;
+      const p = posByLen.get(L);
+      t.style.left = p.x+'px';
+      t.style.top  = p.y+'px';
+      leftCol.appendChild(t);
+
+      const state = { el:t, len:L, vert:false, inBoard:false, gridPos:null, x0:p.x, y0:p.y };
+      tiles.push(state);
+      attachPointerHandlers(state);
+      attachRotateHandlers(state);
+    }
+  }
+
+  function attachRotateHandlers(tile){
+    tile.el.addEventListener('dblclick', (e)=>{ e.preventDefault(); rotateTile(tile); });
+    tile.el.addEventListener('pointerdown', ()=>{ selected = tile; });
+    document.addEventListener('keydown', (e)=>{ if ((e.key==='r'||e.key==='R') && selected) rotateTile(selected); });
+  }
+
+  function rotateTile(tile){
+    tile.vert = !tile.vert;
+    tile.el.classList.toggle('vertical', tile.vert);
+    // swap size
+    if (tile.vert){ tile.el.style.width = `var(--cell)`; tile.el.style.height = `calc(${tile.len} * var(--cell))`; }
+    else           { tile.el.style.width = `calc(${tile.len} * var(--cell))`; tile.el.style.height = `var(--cell)`; }
+
+    // if in board, try to keep/nudge, else just keep orientation in rack
+    const leftRel = parseFloat(tile.el.style.left);
+    const topRel  = parseFloat(tile.el.style.top);
+    if (tile.inBoard){
+      if (!trySnapAndNudge(tile,leftRel,topRel)){
+        // revert if rotation can't fit anywhere close
+        tile.vert = !tile.vert;
+        tile.el.classList.toggle('vertical', tile.vert);
+        if (tile.vert){ tile.el.style.width = `var(--cell)`; tile.el.style.height = `calc(${tile.len} * var(--cell))`; }
+        else           { tile.el.style.width = `calc(${tile.len} * var(--cell))`; tile.el.style.height = `var(--cell)`; }
+      }
+    } else {
+      tile.x0 = leftRel; tile.y0 = topRel;
+    }
+  }
+
+  function attachPointerHandlers(tile){
+    let startX=0,startY=0, originLeft=0, originTop=0, dragging=false, moved=false;
+    tile.el.addEventListener('pointerdown', (e)=>{
+      e.preventDefault(); tile.el.setPointerCapture(e.pointerId);
+      startX=e.clientX; startY=e.clientY;
+      originLeft=parseFloat(tile.el.style.left); originTop=parseFloat(tile.el.style.top);
+      dragging=true; moved=false; tile.el.classList.add('dragging'); selected=tile;
+    });
+    tile.el.addEventListener('pointermove', (e)=>{
+      if(!dragging) return;
+      const dx=e.clientX-startX, dy=e.clientY-startY;
+      if (Math.abs(dx)>4||Math.abs(dy)>4) moved=true;
+      tile.el.style.left=(originLeft+dx)+'px';
+      tile.el.style.top =(originTop +dy)+'px';
+    });
+    tile.el.addEventListener('pointerup', (e)=>{
+      if(!dragging) return; dragging=false; tile.el.classList.remove('dragging');
+      const leftRel=parseFloat(tile.el.style.left);
+      const topRel =parseFloat(tile.el.style.top);
+
+      // Touch "single tap to rotate"
+      const isTouch = e.pointerType !== 'mouse' && e.pointerType !== 'pen';
+      if (!moved && isTouch){ rotateTile(tile); return; }
+
+      // Always attempt snap + nudge relative to board; otherwise return to rack
+      trySnapAndNudge(tile,leftRel,topRel);
+    });
+  }
+
+  // reset to rack layout & orientations
+  function reset(){
+    banner.classList.remove('show'); confetti.innerHTML='';
+    const posByLen = layoutRackPositions();
+    for (const t of tiles){
+      t.vert=false; t.inBoard=false; t.gridPos=null;
+      t.el.classList.remove('vertical');
+      t.el.style.width  = `calc(${t.len} * var(--cell))`;
+      t.el.style.height = `var(--cell)`;
+      const p = posByLen.get(t.len);
+      t.x0=p.x; t.y0=p.y;
+      t.el.style.left = p.x+'px';
+      t.el.style.top  = p.y+'px';
+    }
+  }
+  resetBtn.addEventListener('click', reset);
+
+  // keep reference for R-key rotation
+  let selected = null;
+
+  // init
+  window.addEventListener('load', build);
+  window.addEventListener('resize', reset);  // re-layout rack on resize
+})();
+</script>
+</body>
+</html>
