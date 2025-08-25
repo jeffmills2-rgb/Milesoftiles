@@ -30,12 +30,14 @@
   .len-10 { background:#d6d01a; }     /* yellow */
 
   html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif}
-  .wrap{max-width: min(1100px, 96vw); margin:20px auto 40px; padding: 12px;}
+  .wrap{max-width: 96vw; margin:20px auto 40px; padding: 12px;}
   h1{font-size: clamp(20px, 3vw, 28px); margin:0 0 12px}
   .sub{color:var(--muted); margin-bottom:18px}
 
-  .stage{position:relative; display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap}
-  .left-col{position:relative; width:var(--board); min-height: calc(var(--board) + 6*var(--cell));}
+  .stage{position:relative; display:flex; gap:24px; align-items:flex-start; flex-wrap:nowrap}
+
+  /* Board + generous right gutter for 6 slim columns */
+  .left-col{position:relative; width: calc(var(--board) + 12 * var(--cell)); min-height: var(--board);}
 
   .board{
     position:relative; width:var(--board); height:var(--board);
@@ -44,7 +46,6 @@
     border-radius: 8px;
     overflow:hidden;
   }
-
   .board::before{
     content:"";
     position:absolute; inset:0;
@@ -75,7 +76,7 @@
   .tile.vertical{ width: var(--cell); height: auto; }
   .tile.dragging{ opacity: .9; cursor:grabbing; box-shadow: 0 6px 16px rgba(0,0,0,.25); }
 
-  .hud{ display:flex; align-items:center; gap:10px; margin-top: 8px; flex-wrap:wrap; }
+  .hud{ display:flex; align-items:center; gap:10px; margin-top: 10px; flex-wrap:wrap; }
   button{
     background:#111827; color:white; border:none; border-radius:12px; padding:10px 14px;
     font-weight:700; cursor:pointer; box-shadow:0 2px 0 rgba(0,0,0,.2);
@@ -111,12 +112,12 @@
           <div class="hole"><div class="dim-inner">12 m</div></div>
         </div>
       </div>
+    </div>
 
-      <div class="hud">
-        <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
-        <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
-        <button id="resetBtn" type="button" aria-label="Reset tiles">Reset</button>
-      </div>
+    <div class="hud">
+      <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
+      <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
+      <button id="resetBtn" type="button" aria-label="Reset tiles">Reset</button>
     </div>
   </div>
 
@@ -137,17 +138,17 @@
   const banner  = document.getElementById('banner');
   const confetti = document.getElementById('confetti');
 
-  const BOARD_CELLS = 14;
-  const RING_COUNT = BOARD_CELLS*BOARD_CELLS - 12*12; // 52
+  const RING_COUNT = 14*14 - 12*12; // 52
   const lengths = [3,4,5,6,7,8,9,10];
 
   const tiles = []; // {el, len, vert, inBoard, gridPos:{c,r}, x0,y0}
   let selected = null;
-  let suppressRelease = false; // prevents drop-snap immediately after dblclick rotate
+  let suppressRelease = false; // prevent drop-snap after dblclick rotate
 
-  // geometry helpers in LEFT-COL coordinates
+  // geometry helpers (leftCol coordinate space)
   const bLeft = () => boardEl.offsetLeft;
   const bTop  = () => boardEl.offsetTop;
+  const bRight= () => bLeft() + boardEl.offsetWidth;
   const snap = v => Math.round(v / CELL);
   const isRingCell = (c,r) => (c>=0 && c<14 && r>=0 && r<14) && (c===0 || r===0 || c===13 || r===13);
 
@@ -173,11 +174,8 @@
       for (let i=0;i<tile.len;i++) if(!isRingCell(c+i,r)) return false;
     }
     const occ = occupiedGrid(tile);
-    if (tile.vert){
-      for(let i=0;i<tile.len;i++) if (occ.has(`${c},${r+i}`)) return false;
-    } else {
-      for(let i=0;i<tile.len;i++) if (occ.has(`${c+i},${r}`)) return false;
-    }
+    if (tile.vert){ for(let i=0;i<tile.len;i++) if (occ.has(`${c},${r+i}`)) return false; }
+    else           { for(let i=0;i<tile.len;i++) if (occ.has(`${c+i},${r}`)) return false; }
     return true;
   }
 
@@ -196,9 +194,7 @@
       const cc = c+dx, rr = r+dy;
       if (validAt(tile,cc,rr)){ placeTileAt(tile,cc,rr); flash(tile.el,'ok'); checkWin(); return true; }
     }
-    flash(tile.el,'bad');
-    returnToRack(tile);
-    return false;
+    flash(tile.el,'bad'); returnToRack(tile); return false;
   }
 
   function flash(el,kind){
@@ -236,23 +232,34 @@
     setTimeout(()=>confetti.innerHTML='', 2600);
   }
 
-  /* ---------- Rack layout (multi-row; fits under board) ---------- */
-  // More whitespace so dblclick near rack never snaps into the frame:
-  const RACK_GAP_CELLS = 1.2;     // vertical gap from board to first rack row (in cells)
-  const ROW_GAP_PX = 10;
-  // Rows chosen to keep width <= board width
-  const rows = [[10,3],[9,4],[8,5],[7,6]];
+  /* ---------- Right-side rack layout: 6 columns, vertical tiles ---------- */
+  const RACK_SIDE_GAP_CELLS = 1.4;  // horizontal gap between board and rack
+  const COL_GAP_PX = 12;            // gap between columns
+  const ROW_GAP_PX = 10;            // vertical gap between tiles
+
+  // Columns (heights ≤ 10; total = 52): [10] · [7,3] · [6,4] · [9] · [8] · [5]
+  const rackCols = [
+    [10],
+    [7,3],
+    [6,4],
+    [9],
+    [8],
+    [5],
+  ];
 
   function layoutRackPositions(){
-    const startLeft = bLeft();
-    const startTop  = bTop() + boardEl.offsetHeight + RACK_GAP_CELLS*CELL;
+    const startLeft = bRight() + RACK_SIDE_GAP_CELLS * CELL;
+    const startTop  = bTop() + 0.5 * CELL;
     const posByLen = new Map();
-    let y = startTop;
-    for (const row of rows){
-      let x = startLeft;
-      row.forEach((L)=>{ posByLen.set(L,{x,y}); x += L*CELL + 10; });
-      y += CELL + ROW_GAP_PX;
-    }
+
+    rackCols.forEach((col, ci)=>{
+      const colX = startLeft + ci * (CELL + COL_GAP_PX);  // vertical tiles are CELL wide
+      let y = startTop;
+      col.forEach((L)=>{
+        posByLen.set(L, {x: colX, y});
+        y += (L * CELL) + ROW_GAP_PX;  // tile height + gap
+      });
+    });
     return posByLen;
   }
 
@@ -260,12 +267,17 @@
     const posByLen = layoutRackPositions();
     for (const L of lengths){
       const t = document.createElement('div');
-      t.className = `tile len-${L}`; t.tabIndex = 0; t.textContent = String(L);
-      t.style.width = `calc(${L} * var(--cell))`; t.style.height = `var(--cell)`;
-      const p = posByLen.get(L); t.style.left = p.x+'px'; t.style.top = p.y+'px';
+      t.className = `tile len-${L} vertical`;     // vertical by default
+      t.tabIndex = 0;
+      t.textContent = String(L);
+      t.style.width  = `var(--cell)`;
+      t.style.height = `calc(${L} * var(--cell))`;
+      const p = posByLen.get(L);
+      t.style.left = p.x+'px';
+      t.style.top  = p.y+'px';
       leftCol.appendChild(t);
 
-      const state = { el:t, len:L, vert:false, inBoard:false, gridPos:null, x0:p.x, y0:p.y };
+      const state = { el:t, len:L, vert:true, inBoard:false, gridPos:null, x0:p.x, y0:p.y };
       tiles.push(state);
       attachPointerHandlers(state);
       attachRotateHandlers(state);
@@ -275,7 +287,7 @@
   function attachRotateHandlers(tile){
     tile.el.addEventListener('dblclick', (e)=>{
       e.preventDefault();
-      suppressRelease = true; setTimeout(()=>suppressRelease=false, 250);   // don’t snap on this double-click release
+      suppressRelease = true; setTimeout(()=>suppressRelease=false, 250);
       rotateTile(tile);
     });
     tile.el.addEventListener('pointerdown', ()=>{ selected = tile; });
@@ -291,18 +303,13 @@
     const leftRel = parseFloat(tile.el.style.left);
     const topRel  = parseFloat(tile.el.style.top);
     if (tile.inBoard){
-      // keep/nudge if already placed
-      if (!trySnapAndNudge(tile,leftRel,topRel)){
-        // revert if rotation can't fit nearby
+      if (!trySnapAndNudge(tile,leftRel,topRel)){  // revert if rotation can't fit nearby
         tile.vert = !tile.vert;
         tile.el.classList.toggle('vertical', tile.vert);
         if (tile.vert){ tile.el.style.width = `var(--cell)`; tile.el.style.height = `calc(${tile.len} * var(--cell))`; }
         else           { tile.el.style.width = `calc(${tile.len} * var(--cell))`; tile.el.style.height = `var(--cell)`; }
       }
-    } else {
-      // stay where it is in the rack
-      tile.x0 = leftRel; tile.y0 = topRel;
-    }
+    } else { tile.x0 = leftRel; tile.y0 = topRel; }
   }
 
   function attachPointerHandlers(tile){
@@ -322,25 +329,19 @@
     });
     tile.el.addEventListener('pointerup', (e)=>{
       if(!dragging) return; dragging=false; tile.el.classList.remove('dragging');
-
       if (suppressRelease){ suppressRelease=false; return; }  // ignore drop after dblclick rotation
-
       const leftRel=parseFloat(tile.el.style.left);
       const topRel =parseFloat(tile.el.style.top);
-
-      // Touch "single tap to rotate"
       const isTouch = e.pointerType !== 'mouse' && e.pointerType !== 'pen';
       if (!moved && isTouch){ rotateTile(tile); return; }
-
       trySnapAndNudge(tile,leftRel,topRel);
     });
   }
 
-  // preserve placements and reflow rack after zoom/resize
+  // preserve placements and reflow rack after zoom/resizes
   function relayoutAfterZoom(){
     const posByLen = layoutRackPositions();
     for (const t of tiles){
-      // update size
       if (t.vert){ t.el.style.width = `var(--cell)`; t.el.style.height = `calc(${t.len} * var(--cell))`; }
       else        { t.el.style.width = `calc(${t.len} * var(--cell))`; t.el.style.height = `var(--cell)`; }
 
@@ -357,34 +358,31 @@
   }
 
   function setCell(px){
-    CELL = px;
-    root.style.setProperty('--cell', px + 'px');
-    relayoutAfterZoom();
+    CELL = px; root.style.setProperty('--cell', px + 'px'); relayoutAfterZoom();
   }
 
-  // reset to rack layout & orientations
   function reset(){
     banner.classList.remove('show'); confetti.innerHTML='';
+    const posByLen = layoutRackPositions();
     for (const t of tiles){
-      t.vert=false; t.inBoard=false; t.gridPos=null;
-      t.el.classList.remove('vertical');
+      t.vert=true; t.inBoard=false; t.gridPos=null;
+      t.el.classList.add('vertical');
+      t.el.style.width  = `var(--cell)`;
+      t.el.style.height = `calc(${t.len} * var(--cell))`;
+      const p = posByLen.get(t.len);
+      t.x0=p.x; t.y0=p.y;
+      t.el.style.left = p.x+'px';
+      t.el.style.top  = p.y+'px';
     }
-    relayoutAfterZoom();
   }
 
   resetBtn.addEventListener('click', reset);
-  zoomIn.addEventListener('click', ()=>{
-    const newPx = Math.min(80, Math.round(CELL + 8));  // step +8px
-    if (newPx !== CELL) setCell(newPx);
-  });
-  zoomOut.addEventListener('click', ()=>{
-    const newPx = Math.max(32, Math.round(CELL - 8));
-    if (newPx !== CELL) setCell(newPx);
-  });
+  zoomIn.addEventListener('click', ()=>{ const n=Math.min(80, Math.round(CELL+8)); if(n!==CELL) setCell(n); });
+  zoomOut.addEventListener('click', ()=>{ const n=Math.max(32, Math.round(CELL-8)); if(n!==CELL) setCell(n); });
 
   // init
-  window.addEventListener('load', () => { build(); });
-  window.addEventListener('resize', relayoutAfterZoom);  // preserve placements on resize
+  window.addEventListener('load', build);
+  window.addEventListener('resize', relayoutAfterZoom);
 })();
 </script>
 </body>
