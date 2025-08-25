@@ -6,7 +6,7 @@
 <title>Frame Tiles — 14×14 outside, 12×12 inside</title>
 <style>
   :root{
-    --cell: 48px;                  /* 1 m = 48 px */
+    --cell: 48px;                  /* 1 m = 48 px (zoom changes this) */
     --board: calc(14 * var(--cell));
     --hole:  calc(12 * var(--cell));
     --bg: #fafafa;
@@ -35,7 +35,7 @@
   .sub{color:var(--muted); margin-bottom:18px}
 
   .stage{position:relative; display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap}
-  .left-col{position:relative; width:var(--board); min-height: calc(var(--board) + 5*var(--cell));}
+  .left-col{position:relative; width:var(--board); min-height: calc(var(--board) + 6*var(--cell));}
 
   .board{
     position:relative; width:var(--board); height:var(--board);
@@ -75,7 +75,7 @@
   .tile.vertical{ width: var(--cell); height: auto; }
   .tile.dragging{ opacity: .9; cursor:grabbing; box-shadow: 0 6px 16px rgba(0,0,0,.25); }
 
-  .hud{ display:flex; align-items:center; gap:10px; margin-top: 8px; }
+  .hud{ display:flex; align-items:center; gap:10px; margin-top: 8px; flex-wrap:wrap; }
   button{
     background:#111827; color:white; border:none; border-radius:12px; padding:10px 14px;
     font-weight:700; cursor:pointer; box-shadow:0 2px 0 rgba(0,0,0,.2);
@@ -113,6 +113,8 @@
       </div>
 
       <div class="hud">
+        <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
+        <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
         <button id="resetBtn" type="button" aria-label="Reset tiles">Reset</button>
       </div>
     </div>
@@ -125,10 +127,13 @@
 
 <script>
 (() => {
-  const CELL = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--cell'));
+  const root = document.documentElement;
+  let CELL = parseFloat(getComputedStyle(root).getPropertyValue('--cell'));   // px per unit
   const leftCol = document.getElementById('leftCol');
   const boardEl = document.getElementById('board');
   const resetBtn= document.getElementById('resetBtn');
+  const zoomIn  = document.getElementById('zoomIn');
+  const zoomOut = document.getElementById('zoomOut');
   const banner  = document.getElementById('banner');
   const confetti = document.getElementById('confetti');
 
@@ -137,13 +142,12 @@
   const lengths = [3,4,5,6,7,8,9,10];
 
   const tiles = []; // {el, len, vert, inBoard, gridPos:{c,r}, x0,y0}
+  let selected = null;
+  let suppressRelease = false; // prevents drop-snap immediately after dblclick rotate
 
-  // --- geometry helpers in LEFT-COL coordinates ---
+  // geometry helpers in LEFT-COL coordinates
   const bLeft = () => boardEl.offsetLeft;
   const bTop  = () => boardEl.offsetTop;
-  const bRight= () => bLeft() + boardEl.offsetWidth;
-  const bBottom=() => bTop()  + boardEl.offsetHeight;
-
   const snap = v => Math.round(v / CELL);
   const isRingCell = (c,r) => (c>=0 && c<14 && r>=0 && r<14) && (c===0 || r===0 || c===13 || r===13);
 
@@ -159,7 +163,6 @@
   }
 
   function validAt(tile,c,r){
-    // stay on ring & bounds
     if (tile.vert){
       if (!(c===0 || c===13)) return false;
       if (r<0 || r+tile.len-1>13) return false;
@@ -169,7 +172,6 @@
       if (c<0 || c+tile.len-1>13) return false;
       for (let i=0;i<tile.len;i++) if(!isRingCell(c+i,r)) return false;
     }
-    // no overlap
     const occ = occupiedGrid(tile);
     if (tile.vert){
       for(let i=0;i<tile.len;i++) if (occ.has(`${c},${r+i}`)) return false;
@@ -187,20 +189,13 @@
   }
 
   function trySnapAndNudge(tile, leftRel, topRel){
-    // leftRel/topRel are tile's top-left in left-col coordinates
     let c = snap(leftRel - bLeft()), r = snap(topRel - bTop());
-
-    // direct snap
     if (validAt(tile,c,r)){ placeTileAt(tile,c,r); flash(tile.el,'ok'); checkWin(); return true; }
-
-    // search 8 neighbors within radius 1
     const neighbors = [[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
     for (const [dx,dy] of neighbors){
       const cc = c+dx, rr = r+dy;
       if (validAt(tile,cc,rr)){ placeTileAt(tile,cc,rr); flash(tile.el,'ok'); checkWin(); return true; }
     }
-
-    // no legal spot near → back to rack
     flash(tile.el,'bad');
     returnToRack(tile);
     return false;
@@ -241,24 +236,22 @@
     setTimeout(()=>confetti.innerHTML='', 2600);
   }
 
-  // ---------- Layout rack (multi-row that always fits under board) ----------
-  // Rows chosen to keep width <= 14 cells: [10,3], [9,4], [8,5], [7,6]
+  /* ---------- Rack layout (multi-row; fits under board) ---------- */
+  // More whitespace so dblclick near rack never snaps into the frame:
+  const RACK_GAP_CELLS = 1.2;     // vertical gap from board to first rack row (in cells)
+  const ROW_GAP_PX = 10;
+  // Rows chosen to keep width <= board width
   const rows = [[10,3],[9,4],[8,5],[7,6]];
 
   function layoutRackPositions(){
     const startLeft = bLeft();
-    const startTop  = bTop() + boardEl.offsetHeight + 14;
-    const rowGap = 10;
-
+    const startTop  = bTop() + boardEl.offsetHeight + RACK_GAP_CELLS*CELL;
     const posByLen = new Map();
     let y = startTop;
     for (const row of rows){
       let x = startLeft;
-      row.forEach((L,idx)=>{
-        posByLen.set(L, {x, y});
-        x += L*CELL + 10;
-      });
-      y += CELL + rowGap;
+      row.forEach((L)=>{ posByLen.set(L,{x,y}); x += L*CELL + 10; });
+      y += CELL + ROW_GAP_PX;
     }
     return posByLen;
   }
@@ -267,14 +260,9 @@
     const posByLen = layoutRackPositions();
     for (const L of lengths){
       const t = document.createElement('div');
-      t.className = `tile len-${L}`;
-      t.tabIndex = 0;
-      t.textContent = String(L);
-      t.style.width = `calc(${L} * var(--cell))`;
-      t.style.height = `var(--cell)`;
-      const p = posByLen.get(L);
-      t.style.left = p.x+'px';
-      t.style.top  = p.y+'px';
+      t.className = `tile len-${L}`; t.tabIndex = 0; t.textContent = String(L);
+      t.style.width = `calc(${L} * var(--cell))`; t.style.height = `var(--cell)`;
+      const p = posByLen.get(L); t.style.left = p.x+'px'; t.style.top = p.y+'px';
       leftCol.appendChild(t);
 
       const state = { el:t, len:L, vert:false, inBoard:false, gridPos:null, x0:p.x, y0:p.y };
@@ -285,7 +273,11 @@
   }
 
   function attachRotateHandlers(tile){
-    tile.el.addEventListener('dblclick', (e)=>{ e.preventDefault(); rotateTile(tile); });
+    tile.el.addEventListener('dblclick', (e)=>{
+      e.preventDefault();
+      suppressRelease = true; setTimeout(()=>suppressRelease=false, 250);   // don’t snap on this double-click release
+      rotateTile(tile);
+    });
     tile.el.addEventListener('pointerdown', ()=>{ selected = tile; });
     document.addEventListener('keydown', (e)=>{ if ((e.key==='r'||e.key==='R') && selected) rotateTile(selected); });
   }
@@ -293,22 +285,22 @@
   function rotateTile(tile){
     tile.vert = !tile.vert;
     tile.el.classList.toggle('vertical', tile.vert);
-    // swap size
     if (tile.vert){ tile.el.style.width = `var(--cell)`; tile.el.style.height = `calc(${tile.len} * var(--cell))`; }
     else           { tile.el.style.width = `calc(${tile.len} * var(--cell))`; tile.el.style.height = `var(--cell)`; }
 
-    // if in board, try to keep/nudge, else just keep orientation in rack
     const leftRel = parseFloat(tile.el.style.left);
     const topRel  = parseFloat(tile.el.style.top);
     if (tile.inBoard){
+      // keep/nudge if already placed
       if (!trySnapAndNudge(tile,leftRel,topRel)){
-        // revert if rotation can't fit anywhere close
+        // revert if rotation can't fit nearby
         tile.vert = !tile.vert;
         tile.el.classList.toggle('vertical', tile.vert);
         if (tile.vert){ tile.el.style.width = `var(--cell)`; tile.el.style.height = `calc(${tile.len} * var(--cell))`; }
         else           { tile.el.style.width = `calc(${tile.len} * var(--cell))`; tile.el.style.height = `var(--cell)`; }
       }
     } else {
+      // stay where it is in the rack
       tile.x0 = leftRel; tile.y0 = topRel;
     }
   }
@@ -330,6 +322,9 @@
     });
     tile.el.addEventListener('pointerup', (e)=>{
       if(!dragging) return; dragging=false; tile.el.classList.remove('dragging');
+
+      if (suppressRelease){ suppressRelease=false; return; }  // ignore drop after dblclick rotation
+
       const leftRel=parseFloat(tile.el.style.left);
       const topRel =parseFloat(tile.el.style.top);
 
@@ -337,34 +332,59 @@
       const isTouch = e.pointerType !== 'mouse' && e.pointerType !== 'pen';
       if (!moved && isTouch){ rotateTile(tile); return; }
 
-      // Always attempt snap + nudge relative to board; otherwise return to rack
       trySnapAndNudge(tile,leftRel,topRel);
     });
+  }
+
+  // preserve placements and reflow rack after zoom/resize
+  function relayoutAfterZoom(){
+    const posByLen = layoutRackPositions();
+    for (const t of tiles){
+      // update size
+      if (t.vert){ t.el.style.width = `var(--cell)`; t.el.style.height = `calc(${t.len} * var(--cell))`; }
+      else        { t.el.style.width = `calc(${t.len} * var(--cell))`; t.el.style.height = `var(--cell)`; }
+
+      if (t.inBoard && t.gridPos){
+        t.el.style.left = (bLeft() + t.gridPos.c*CELL) + 'px';
+        t.el.style.top  = (bTop()  + t.gridPos.r*CELL) + 'px';
+      } else {
+        const p = posByLen.get(t.len);
+        t.x0 = p.x; t.y0 = p.y;
+        t.el.style.left = p.x+'px';
+        t.el.style.top  = p.y+'px';
+      }
+    }
+  }
+
+  function setCell(px){
+    CELL = px;
+    root.style.setProperty('--cell', px + 'px');
+    relayoutAfterZoom();
   }
 
   // reset to rack layout & orientations
   function reset(){
     banner.classList.remove('show'); confetti.innerHTML='';
-    const posByLen = layoutRackPositions();
     for (const t of tiles){
       t.vert=false; t.inBoard=false; t.gridPos=null;
       t.el.classList.remove('vertical');
-      t.el.style.width  = `calc(${t.len} * var(--cell))`;
-      t.el.style.height = `var(--cell)`;
-      const p = posByLen.get(t.len);
-      t.x0=p.x; t.y0=p.y;
-      t.el.style.left = p.x+'px';
-      t.el.style.top  = p.y+'px';
     }
+    relayoutAfterZoom();
   }
-  resetBtn.addEventListener('click', reset);
 
-  // keep reference for R-key rotation
-  let selected = null;
+  resetBtn.addEventListener('click', reset);
+  zoomIn.addEventListener('click', ()=>{
+    const newPx = Math.min(80, Math.round(CELL + 8));  // step +8px
+    if (newPx !== CELL) setCell(newPx);
+  });
+  zoomOut.addEventListener('click', ()=>{
+    const newPx = Math.max(32, Math.round(CELL - 8));
+    if (newPx !== CELL) setCell(newPx);
+  });
 
   // init
-  window.addEventListener('load', build);
-  window.addEventListener('resize', reset);  // re-layout rack on resize
+  window.addEventListener('load', () => { build(); });
+  window.addEventListener('resize', relayoutAfterZoom);  // preserve placements on resize
 })();
 </script>
 </body>
